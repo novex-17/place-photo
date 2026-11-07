@@ -74,7 +74,10 @@
     const scaleInput = document.querySelector('#scale');
     const undoButton = document.querySelector('#undo');
     const removeButton = document.querySelector('#remove');
-    const W = canvas.width, H = canvas.height;
+    const W = 2480, H = 3508;
+    canvas.width = 744; canvas.height = 1052;
+    const thumbnails = new WeakMap();
+    let pendingFrame = false;
     const photos = [];
     const history = [];
     let selected = -1;
@@ -100,15 +103,29 @@
       scaleInput.disabled = removeButton.disabled = !item;
       scaleInput.value = item ? Math.round(item.width / item.baseWidth * 100) : 100;
     }
-    function draw(includeSelection = true) {
+    function draw() {
+      if (pendingFrame) return;
+      pendingFrame = true;
+      requestAnimationFrame(() => { pendingFrame = false; render(ctx, true); });
+    }
+    function render(ctx, includeSelection = false) {
+      ctx.save();
+      ctx.setTransform(ctx.canvas.width / W, 0, 0, ctx.canvas.height / H, 0, 0);
       ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
       photos.forEach((item, index) => {
-        ctx.drawImage(item.image, item.x, item.y, item.width, item.height);
+        ctx.drawImage(includeSelection ? (thumbnails.get(item.image) || item.image) : item.image, item.x, item.y, item.width, item.height);
         if (includeSelection && index === selected) {
           ctx.save(); ctx.strokeStyle = '#16875b'; ctx.lineWidth = 9;
           ctx.setLineDash([25, 16]); ctx.strokeRect(item.x, item.y, item.width, item.height); ctx.restore();
         }
       });
+      ctx.restore();
+    }
+    function exportCanvas() {
+      const output = document.createElement('canvas');
+      output.width = W; output.height = H;
+      render(output.getContext('2d'));
+      return output;
     }
     function point(event) {
       const rect = canvas.getBoundingClientRect();
@@ -193,21 +210,32 @@
       });
       return heicLoader;
     }
-    async function openImage(file) {
-      const heic = /\.(heic|heif)$/i.test(file.name) || /image\/hei[cf]/i.test(file.type);
-      let source = file;
-      if (heic) {
-        await loadHeicConverter();
-        if (await HeicTo.isHeic(file)) source = await HeicTo({ blob: file, type: 'image/jpeg', quality: .9 });
-      }
-      const url = URL.createObjectURL(source);
-      const image = new Image();
-      image.src = url;
+    async function decodeImage(blob) {
+      const url = URL.createObjectURL(blob);
+      const image = new Image(); image.src = url;
       try { await image.decode(); return image; }
-      catch (error) { URL.revokeObjectURL(url); throw error; }
+      finally { URL.revokeObjectURL(url); }
+    }
+    async function openImage(file) {
+      let image;
+      try { image = await decodeImage(file); }
+      catch (error) {
+        if (!(/\.(heic|heif)$/i.test(file.name) || /image\/hei[cf]/i.test(file.type))) throw error;
+        await loadHeicConverter();
+        image = await decodeImage(await HeicTo({ blob: file, type: 'image/jpeg', quality: .9 }));
+      }
+      const thumb = document.createElement('canvas');
+      const ratio = Math.min(1, 1000 / Math.max(image.naturalWidth, image.naturalHeight));
+      thumb.width = Math.max(1, Math.round(image.naturalWidth * ratio));
+      thumb.height = Math.max(1, Math.round(image.naturalHeight * ratio));
+      thumb.getContext('2d').drawImage(image, 0, 0, thumb.width, thumb.height);
+      thumbnails.set(image, thumb);
+      return image;
     }
     photoInput.addEventListener('change', async () => {
+      if (photoInput.disabled) return;
       const files = [...photoInput.files];
+      photoInput.disabled = true;
       const failed = [];
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
@@ -220,9 +248,11 @@
           const offset = (photos.length % 5) * 65;
           photos.push({ image, x: (W - baseWidth) / 2 + offset, y: (H - height) / 2 + offset, width: baseWidth, height, baseWidth });
           selected = photos.length - 1;
+          updateControls(); draw();
+          await new Promise(resolve => requestAnimationFrame(resolve));
         } catch { failed.push(file.name); }
       }
-      photoInput.value = ''; updateControls(); draw();
+      photoInput.value = ''; photoInput.disabled = false; updateControls(); draw();
       status.textContent = failed.length ? `เพิ่มได้ ${files.length - failed.length} รูป • เปิดไม่ได้: ${failed.join(', ')}` : `เพิ่มรูปแล้ว ${files.length} รูป • แตะรูปเพื่อลากหรือปรับขนาด`;
       if (failed.length) alert(`เปิดรูปไม่สำเร็จ: ${failed.join(', ')}`);
     });
@@ -233,16 +263,16 @@
       previewImage.removeAttribute('src');
     });
     document.querySelector('#save').addEventListener('click', () => {
-      draw(false);
+      const output = exportCanvas();
       if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
         try {
-          previewImage.src = canvas.toDataURL('image/png');
+          previewImage.src = output.toDataURL('image/png');
           preview.hidden = false;
         } catch { alert('บันทึกภาพไม่สำเร็จ'); }
         draw();
         return;
       }
-      canvas.toBlob(blob => {
+      output.toBlob(blob => {
         draw();
         if (!blob) { alert('บันทึกภาพไม่สำเร็จ'); return; }
         const url = URL.createObjectURL(blob);
