@@ -1,0 +1,9 @@
+node_modules/
+npm-cache/
+chrome-*/
+*.tgz
+*-test.html
+repro.html
+verify.html
+verify.mjs
+test-photo.heic

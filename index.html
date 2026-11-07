@@ -49,7 +49,7 @@
   </style>
 </head>
 <body>
-  <header><h1>จัดรูปลงกระดาษ A4</h1><p>แตะรูปเพื่อเลือก • ลากเพื่อย้าย • ใช้สองนิ้วปรับขนาด</p></header>
+  <header><h1>จัดรูปลงกระดาษ A4</h1><p id="status" aria-live="polite">แตะรูปเพื่อเลือก • ลากเพื่อย้าย • ใช้สองนิ้วปรับขนาด</p></header>
   <main>
     <section class="panel" aria-label="เครื่องมือจัดรูป">
       <label class="file-button" for="photos">＋ เพิ่มรูป</label>
@@ -70,6 +70,7 @@
     const canvas = document.querySelector('#sheet');
     const ctx = canvas.getContext('2d');
     const photoInput = document.querySelector('#photos');
+    const status = document.querySelector('#status');
     const scaleInput = document.querySelector('#scale');
     const undoButton = document.querySelector('#undo');
     const removeButton = document.querySelector('#remove');
@@ -181,23 +182,49 @@
       if (selected < 0) return;
       snapshot(); photos.splice(selected, 1); selected = -1; updateControls(); draw();
     });
+    let heicLoader;
+    function loadHeicConverter() {
+      if (!heicLoader) heicLoader = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = './vendor/heic-to.js';
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('โหลดตัวแปลง HEIC ไม่สำเร็จ'));
+        document.head.appendChild(script);
+      });
+      return heicLoader;
+    }
+    async function openImage(file) {
+      const heic = /\.(heic|heif)$/i.test(file.name) || /image\/hei[cf]/i.test(file.type);
+      let source = file;
+      if (heic) {
+        await loadHeicConverter();
+        if (await HeicTo.isHeic(file)) source = await HeicTo({ blob: file, type: 'image/jpeg', quality: .9 });
+      }
+      const url = URL.createObjectURL(source);
+      const image = new Image();
+      image.src = url;
+      try { await image.decode(); return image; }
+      catch (error) { URL.revokeObjectURL(url); throw error; }
+    }
     photoInput.addEventListener('change', async () => {
       const files = [...photoInput.files];
-      for (const file of files) {
-        const url = URL.createObjectURL(file);
+      const failed = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        status.textContent = `กำลังเพิ่มรูป ${i + 1} จาก ${files.length}: ${file.name}`;
         try {
-          const image = new Image();
-          image.src = url;
-          await image.decode();
+          const image = await openImage(file);
           snapshot();
           const baseWidth = Math.min(W * .72, H * .55 * image.naturalWidth / image.naturalHeight);
           const height = baseWidth * image.naturalHeight / image.naturalWidth;
           const offset = (photos.length % 5) * 65;
           photos.push({ image, x: (W - baseWidth) / 2 + offset, y: (H - height) / 2 + offset, width: baseWidth, height, baseWidth });
           selected = photos.length - 1;
-        } catch { alert(`เปิดรูป ${file.name} ไม่สำเร็จ`); }
+        } catch { failed.push(file.name); }
       }
       photoInput.value = ''; updateControls(); draw();
+      status.textContent = failed.length ? `เพิ่มได้ ${files.length - failed.length} รูป • เปิดไม่ได้: ${failed.join(', ')}` : `เพิ่มรูปแล้ว ${files.length} รูป • แตะรูปเพื่อลากหรือปรับขนาด`;
+      if (failed.length) alert(`เปิดรูปไม่สำเร็จ: ${failed.join(', ')}`);
     });
     const preview = document.querySelector('#preview');
     const previewImage = document.querySelector('#preview-image');
