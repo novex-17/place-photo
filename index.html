@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>จัดรูปลงกระดาษ A4</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #18312b; background: #f4f6f1; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { background: #fff; padding: 16px 20px; box-shadow: 0 2px 12px #17382a12; }
+    h1 { font-size: 1.35rem; margin: 0 0 4px; }
+    p { margin: 0; color: #61736b; font-size: .94rem; }
+    main { max-width: 1050px; margin: auto; padding: 20px; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 22px; }
+    .panel { background: #fff; padding: 18px; border-radius: 16px; height: fit-content; box-shadow: 0 4px 18px #17382a10; }
+    .panel > * + * { margin-top: 14px; }
+    button, .file-button { display: block; width: 100%; border: 0; border-radius: 11px; padding: 13px 12px; font: inherit; font-weight: 650; text-align: center; cursor: pointer; background: #e8eee8; color: #18312b; }
+    button:disabled { opacity: .45; cursor: default; }
+    .file-button, .save { background: #196c4b; color: white; }
+    input[type=file] { display: none; }
+    .control { border-top: 1px solid #e5ebe5; padding-top: 14px; }
+    .control label { display: block; font-weight: 650; margin-bottom: 10px; }
+    input[type=range] { width: 100%; accent-color: #196c4b; }
+    .hint { line-height: 1.5; font-size: .86rem; }
+    .preview { position: fixed; inset: 0; z-index: 10; background: #142820ed; padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: center; gap: 12px; color: white; }
+    .preview[hidden] { display: none; }
+    .preview p { color: white; text-align: center; }
+    .preview img { min-height: 0; max-width: 100%; max-height: calc(100% - 110px); object-fit: contain; }
+    .preview button { max-width: 220px; flex: none; }
+    .sheet-area { display: flex; justify-content: center; align-items: flex-start; min-width: 0; }
+    canvas { display: block; width: min(100%, 550px); height: auto; background: white; box-shadow: 0 8px 28px #18312b28; touch-action: none; cursor: grab; }
+    canvas.dragging { cursor: grabbing; }
+    @media (max-width: 720px) {
+      body { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+      header { padding: 10px 16px; flex: none; }
+      h1 { font-size: 1.12rem; margin: 0; }
+      header p { font-size: .78rem; }
+      main { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 10px 10px max(10px, env(safe-area-inset-bottom)); gap: 10px; }
+      .sheet-area { flex: 1; min-height: 0; align-items: center; overflow: hidden; }
+      canvas { width: auto; max-width: 100%; max-height: 100%; border-radius: 3px; }
+      .panel { order: 2; flex: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 10px; border-radius: 15px; }
+      .panel > * + * { margin-top: 0; }
+      button, .file-button { min-height: 56px; padding: 8px 4px; font-size: .85rem; line-height: 1.15; display: flex; align-items: center; justify-content: center; }
+      .control { grid-column: 1 / -1; grid-row: 1; border: 0; padding: 2px 8px 4px; }
+      .control label { font-size: .85rem; margin-bottom: 3px; }
+      input[type=range] { height: 28px; }
+      .hint { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header><h1>จัดรูปลงกระดาษ A4</h1><p>แตะรูปเพื่อเลือก • ลากเพื่อย้าย • ใช้สองนิ้วปรับขนาด</p></header>
+  <main>
+    <section class="panel" aria-label="เครื่องมือจัดรูป">
+      <label class="file-button" for="photos">＋ เพิ่มรูป</label>
+      <input id="photos" type="file" accept="image/*" multiple>
+      <button id="undo" disabled>↶ ย้อนกลับ</button>
+      <div class="control">
+        <label for="scale">ขนาดรูปที่เลือก</label>
+        <input id="scale" type="range" min="10" max="300" value="100" disabled>
+      </div>
+      <button id="remove" disabled>ลบรูป</button>
+      <button id="save" class="save">บันทึก A4</button>
+      <p class="hint">เลือกได้หลายรูปพร้อมกัน • รูปคงสัดส่วนเดิม • ภาพที่บันทึกมีขนาด 2480 × 3508 พิกเซล</p>
+    </section>
+    <div class="sheet-area"><canvas id="sheet" width="2480" height="3508" aria-label="หน้ากระดาษ A4 สำหรับจัดรูป"></canvas></div>
+  </main>
+  <div id="preview" class="preview" hidden><p>กดค้างที่ภาพ แล้วเลือก “บันทึกลงรูปภาพ”</p><img id="preview-image" alt="ภาพ A4 ที่จัดเสร็จแล้ว"><button id="close-preview">กลับไปแก้ไข</button></div>
+  <script>
+    const canvas = document.querySelector('#sheet');
+    const ctx = canvas.getContext('2d');
+    const photoInput = document.querySelector('#photos');
+    const scaleInput = document.querySelector('#scale');
+    const undoButton = document.querySelector('#undo');
+    const removeButton = document.querySelector('#remove');
+    const W = canvas.width, H = canvas.height;
+    const photos = [];
+    const history = [];
+    let selected = -1;
+    let drag = null;
+    const touches = new Map();
+    let pinch = null;
+    let scaleStart = null;
+
+    function snapshot() {
+      history.push({ items: photos.map(({ image, x, y, width, height, baseWidth }) => ({ image, x, y, width, height, baseWidth })), selected });
+      undoButton.disabled = false;
+    }
+    function restore() {
+      const previous = history.pop();
+      if (!previous) return;
+      photos.splice(0, photos.length, ...previous.items);
+      selected = previous.selected;
+      undoButton.disabled = history.length === 0;
+      updateControls(); draw();
+    }
+    function updateControls() {
+      const item = photos[selected];
+      scaleInput.disabled = removeButton.disabled = !item;
+      scaleInput.value = item ? Math.round(item.width / item.baseWidth * 100) : 100;
+    }
+    function draw(includeSelection = true) {
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+      photos.forEach((item, index) => {
+        ctx.drawImage(item.image, item.x, item.y, item.width, item.height);
+        if (includeSelection && index === selected) {
+          ctx.save(); ctx.strokeStyle = '#16875b'; ctx.lineWidth = 9;
+          ctx.setLineDash([25, 16]); ctx.strokeRect(item.x, item.y, item.width, item.height); ctx.restore();
+        }
+      });
+    }
+    function point(event) {
+      const rect = canvas.getBoundingClientRect();
+      return { x: (event.clientX - rect.left) * W / rect.width, y: (event.clientY - rect.top) * H / rect.height };
+    }
+    function hit(p) {
+      for (let i = photos.length - 1; i >= 0; i--) {
+        const a = photos[i];
+        if (p.x >= a.x && p.x <= a.x + a.width && p.y >= a.y && p.y <= a.y + a.height) return i;
+      }
+      return -1;
+    }
+    canvas.addEventListener('pointerdown', event => {
+      const p = point(event), index = hit(p);
+      touches.set(event.pointerId, p);
+      canvas.setPointerCapture(event.pointerId);
+      if (touches.size === 2 && selected >= 0) {
+        const [a, b] = [...touches.values()];
+        const item = photos[selected];
+        pinch = { distance: Math.hypot(a.x - b.x, a.y - b.y), width: item.width, x: item.x, y: item.y, saved: false };
+        drag = null;
+        return;
+      }
+      if (touches.size > 1) return;
+      selected = index; updateControls(); draw();
+      if (index < 0) return;
+      const item = photos[index];
+      drag = { id: event.pointerId, startX: p.x, startY: p.y, x: item.x, y: item.y, saved: false };
+      canvas.classList.add('dragging');
+    });
+    canvas.addEventListener('pointermove', event => {
+      if (!touches.has(event.pointerId)) return;
+      touches.set(event.pointerId, point(event));
+      if (pinch && touches.size === 2 && selected >= 0) {
+        const [a, b] = [...touches.values()];
+        const distance = Math.hypot(a.x - b.x, a.y - b.y);
+        if (pinch.distance < 1 || Math.abs(distance - pinch.distance) < 8 && !pinch.saved) return;
+        if (!pinch.saved) { snapshot(); pinch.saved = true; }
+        const item = photos[selected];
+        const centerX = pinch.x + pinch.width / 2;
+        const centerY = pinch.y + pinch.width * item.image.naturalHeight / item.image.naturalWidth / 2;
+        item.width = Math.max(item.baseWidth * .1, Math.min(item.baseWidth * 3, pinch.width * distance / pinch.distance));
+        item.height = item.width * item.image.naturalHeight / item.image.naturalWidth;
+        item.x = centerX - item.width / 2; item.y = centerY - item.height / 2;
+        updateControls(); draw(); return;
+      }
+      if (!drag || drag.id !== event.pointerId) return;
+      const p = point(event), dx = p.x - drag.startX, dy = p.y - drag.startY;
+      if (!drag.saved && Math.hypot(dx, dy) < 8) return;
+      if (!drag.saved) { snapshot(); drag.saved = true; }
+      photos[selected].x = drag.x + dx;
+      photos[selected].y = drag.y + dy;
+      draw();
+    });
+    function endDrag(event) { touches.delete(event.pointerId); drag = null; pinch = null; canvas.classList.remove('dragging'); }
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+    scaleInput.addEventListener('pointerdown', () => { if (selected >= 0) scaleStart = true; });
+    scaleInput.addEventListener('input', () => {
+      const item = photos[selected]; if (!item) return;
+      if (scaleStart !== false) { snapshot(); scaleStart = false; }
+      const centerX = item.x + item.width / 2, centerY = item.y + item.height / 2;
+      item.width = item.baseWidth * Number(scaleInput.value) / 100;
+      item.height = item.width * item.image.naturalHeight / item.image.naturalWidth;
+      item.x = centerX - item.width / 2; item.y = centerY - item.height / 2;
+      draw();
+    });
+    scaleInput.addEventListener('change', () => { scaleStart = null; });
+    undoButton.addEventListener('click', restore);
+    removeButton.addEventListener('click', () => {
+      if (selected < 0) return;
+      snapshot(); photos.splice(selected, 1); selected = -1; updateControls(); draw();
+    });
+    photoInput.addEventListener('change', async () => {
+      const files = [...photoInput.files];
+      for (const file of files) {
+        const url = URL.createObjectURL(file);
+        try {
+          const image = new Image();
+          image.src = url;
+          await image.decode();
+          snapshot();
+          const baseWidth = Math.min(W * .72, H * .55 * image.naturalWidth / image.naturalHeight);
+          const height = baseWidth * image.naturalHeight / image.naturalWidth;
+          const offset = (photos.length % 5) * 65;
+          photos.push({ image, x: (W - baseWidth) / 2 + offset, y: (H - height) / 2 + offset, width: baseWidth, height, baseWidth });
+          selected = photos.length - 1;
+        } catch { alert(`เปิดรูป ${file.name} ไม่สำเร็จ`); }
+      }
+      photoInput.value = ''; updateControls(); draw();
+    });
+    const preview = document.querySelector('#preview');
+    const previewImage = document.querySelector('#preview-image');
+    document.querySelector('#close-preview').addEventListener('click', () => {
+      preview.hidden = true;
+      previewImage.removeAttribute('src');
+    });
+    document.querySelector('#save').addEventListener('click', () => {
+      draw(false);
+      if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+        try {
+          previewImage.src = canvas.toDataURL('image/png');
+          preview.hidden = false;
+        } catch { alert('บันทึกภาพไม่สำเร็จ'); }
+        draw();
+        return;
+      }
+      canvas.toBlob(blob => {
+        draw();
+        if (!blob) { alert('บันทึกภาพไม่สำเร็จ'); return; }
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url; link.download = 'a4-photo-page.png'; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      }, 'image/png');
+    });
+    draw();
+  </script>
+</body>
+</html>
